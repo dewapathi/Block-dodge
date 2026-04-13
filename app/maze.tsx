@@ -308,17 +308,48 @@ export default function MazeGame() {
     setPaused(false);
   }
 
-  // ── Swipe ────────────────────────────────────────────────────────────────────
+  // ── Drag to move ─────────────────────────────────────────────────────────────
+  // dragBase tracks the gesture position at the last cell-move so we measure
+  // incremental distance from that point, not from the gesture origin.
+  const dragBaseRef = useRef({ x: 0, y: 0 });
+
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder:  () => true,
-      onPanResponderRelease: (_, gs) => {
-        if (Math.abs(gs.dx) > Math.abs(gs.dy)) {
-          gs.dx > 15 ? move(0, 1) : move(0, -1);
+
+      onPanResponderGrant: () => {
+        dragBaseRef.current = { x: 0, y: 0 };
+      },
+
+      onPanResponderMove: (_, gs) => {
+        const relX = gs.dx - dragBaseRef.current.x;
+        const relY = gs.dy - dragBaseRef.current.y;
+        const thr  = CELL * 0.55; // ~55 % of a cell triggers a step
+
+        if (Math.abs(relX) >= Math.abs(relY)) {
+          // horizontal dominant
+          if (relX >= thr) {
+            move(0, 1);
+            dragBaseRef.current = { x: gs.dx, y: gs.dy };
+          } else if (relX <= -thr) {
+            move(0, -1);
+            dragBaseRef.current = { x: gs.dx, y: gs.dy };
+          }
         } else {
-          gs.dy > 15 ? move(1, 0) : move(-1, 0);
+          // vertical dominant
+          if (relY >= thr) {
+            move(1, 0);
+            dragBaseRef.current = { x: gs.dx, y: gs.dy };
+          } else if (relY <= -thr) {
+            move(-1, 0);
+            dragBaseRef.current = { x: gs.dx, y: gs.dy };
+          }
         }
+      },
+
+      onPanResponderRelease: () => {
+        dragBaseRef.current = { x: 0, y: 0 };
       },
     })
   ).current;
