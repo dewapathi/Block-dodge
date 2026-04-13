@@ -21,14 +21,35 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { generateMaze, MazeGrid } from '@/utils/mazeGenerator';
+import { GameProgress } from '@/utils/gameProgress';
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
-const COLS     = 9;
-const WALL     = 3;
-const CELL     = Math.floor((SCREEN_W - WALL * 2) / COLS);
-const MAZE_W   = CELL * COLS + WALL * 2;
-const EMOJI_SZ = Math.floor(CELL * 0.68);
+const WALL = 3;
+
+/** Columns grow with stage → smaller cells → bigger maze → harder */
+function colsForStage(s: number): number {
+  if (s <= 3)  return 7;   // easy     ~56 cells
+  if (s <= 7)  return 9;   // medium   ~90 cells
+  if (s <= 12) return 11;  // hard    ~143 cells
+  if (s <= 18) return 13;  // v.hard  ~195 cells
+  return 15;               // extreme ~270 cells
+}
+
+interface LayoutVals {
+  COLS: number; CELL: number; ROWS: number;
+  MAZE_W: number; MAZE_H: number; EMOJI_SZ: number;
+}
+
+function computeLayout(stage: number, availH: number): LayoutVals {
+  const COLS    = colsForStage(stage);
+  const CELL    = Math.floor((SCREEN_W - WALL * 2) / COLS);
+  const ROWS    = Math.max(8, Math.floor(availH / CELL));
+  const MAZE_W  = CELL * COLS + WALL * 2;
+  const MAZE_H  = CELL * ROWS + WALL * 2;
+  const EMOJI_SZ = Math.floor(CELL * 0.68);
+  return { COLS, CELL, ROWS, MAZE_W, MAZE_H, EMOJI_SZ };
+}
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const C_SCREEN = '#0a0118';
@@ -53,7 +74,7 @@ const worldEmoji = (s: number) =>
 const pad       = (n: number) => String(n).padStart(2, '0');
 const fmtTime   = (s: number) => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
 const stageTime = (s: number) => Math.max(25, 90 - (s - 1) * 4);
-const stageSeed = (s: number, rows: number) => s * 997 + rows * 31 + COLS;
+const stageSeed = (s: number, rows: number, cols: number) => s * 997 + rows * 31 + cols;
 
 function calcStars(used: number, total: number): 1 | 2 | 3 {
   const r = used / total;
@@ -68,18 +89,19 @@ function liveStars(timeLeft: number, total: number): 1 | 2 | 3 {
 }
 
 // ─── Wall builder ─────────────────────────────────────────────────────────────
-function buildWalls(maze: MazeGrid, rows: number) {
+function buildWalls(maze: MazeGrid, L: LayoutVals) {
   type Seg = { key: string; t: number; l: number; w: number; h: number };
   const segs: Seg[] = [];
   if (!maze || maze.length === 0) return segs;
 
-  const mh = CELL * rows;
-  segs.push({ key: 'ot', t: 0,  l: 0,          w: MAZE_W,         h: WALL });
-  segs.push({ key: 'ol', t: 0,  l: 0,           w: WALL,           h: mh + WALL });
-  segs.push({ key: 'or', t: 0,  l: MAZE_W-WALL, w: WALL,           h: mh + WALL });
-  segs.push({ key: 'ob', t: mh, l: 0,           w: MAZE_W - CELL,  h: WALL }); // gap = exit
+  const { COLS, CELL, ROWS, MAZE_W } = L;
+  const mh = CELL * ROWS;
+  segs.push({ key: 'ot', t: 0,  l: 0,            w: MAZE_W,        h: WALL });
+  segs.push({ key: 'ol', t: 0,  l: 0,             w: WALL,          h: mh + WALL });
+  segs.push({ key: 'or', t: 0,  l: MAZE_W - WALL, w: WALL,          h: mh + WALL });
+  segs.push({ key: 'ob', t: mh, l: 0,             w: MAZE_W - CELL, h: WALL }); // gap = exit
 
-  for (let r = 0; r < rows; r++) {
+  for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const cell = maze[r][c];
       const x = WALL + c * CELL;
@@ -88,7 +110,7 @@ function buildWalls(maze: MazeGrid, rows: number) {
       if (cell.right && c < COLS - 1)
         segs.push({ key: `rw${r}_${c}`, t: y-WALL, l: x+CELL-WALL, w: WALL, h: CELL+WALL });
 
-      if (cell.bottom && !(r === rows-1 && c === COLS-1))
+      if (cell.bottom && !(r === ROWS-1 && c === COLS-1))
         segs.push({ key: `bw${r}_${c}`, t: y+CELL-WALL, l: x-WALL, w: CELL+WALL, h: WALL });
     }
   }
@@ -98,17 +120,18 @@ function buildWalls(maze: MazeGrid, rows: number) {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function MazeGame() {
   const insets = useSafeAreaInsets();
-  const { mode, stage: stageParam } = useLocalSearchParams<{ mode?: string; stage?: string }>();
+  const { mode, stage: stageParam, lives: livesParam } =
+    useLocalSearchParams<{ mode?: string; stage?: string; lives?: string }>();
 
-  const isAdventure  = mode !== 'time';
-  const initStage    = parseInt(stageParam || '1', 10);
+  const isAdventure = mode !== 'time';
+  const initStage   = parseInt(stageParam || '1', 10);
+  const initLives   = isAdventure ? parseInt(livesParam || '3', 10) : 1;
 
-  // ── Computed layout ─────────────────────────────────────────────────────────
+  // ── Layout (recomputed per stage inside initLevel, read via ref in renders) ──
   const HUD_H  = 92;
   const CTRL_H = 205;
   const availH = SCREEN_H - HUD_H - CTRL_H - insets.top - insets.bottom - 14;
-  const ROWS   = Math.max(8, Math.floor(availH / CELL));
-  const MAZE_H = CELL * ROWS + WALL * 2;
+  const layoutRef = useRef<LayoutVals>(computeLayout(initStage, availH));
 
   // ── Refs (no stale-closure issues) ──────────────────────────────────────────
   const mazeRef    = useRef<MazeGrid>([]);
@@ -116,15 +139,15 @@ export default function MazeGame() {
   const wonRef     = useRef(false);
   const deadRef    = useRef(false);
   const stageRef   = useRef(initStage);
-  const livesRef   = useRef(isAdventure ? 3 : 1);
+  const livesRef   = useRef(initLives);
   const timeRef    = useRef(isAdventure ? stageTime(initStage) : 90);
   const timerIdRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const dpadIdRef  = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const pausedRef  = useRef(false);
 
   const playerAnim = useRef(new Animated.ValueXY({
-    x: WALL + (CELL - EMOJI_SZ) / 2,
-    y: WALL + (CELL - EMOJI_SZ) / 2,
+    x: WALL + (layoutRef.current.CELL - layoutRef.current.EMOJI_SZ) / 2,
+    y: WALL + (layoutRef.current.CELL - layoutRef.current.EMOJI_SZ) / 2,
   }));
   const goalScale  = useRef(new Animated.Value(1));
 
@@ -138,12 +161,11 @@ export default function MazeGame() {
 
   // ── State ───────────────────────────────────────────────────────────────────
   const [stage,     setStage]     = useState(initStage);
-  const [lives,     setLives]     = useState(isAdventure ? 3 : 1);
+  const [lives,     setLives]     = useState(initLives);
   const [timeLeft,  setTimeLeft]  = useState(isAdventure ? stageTime(initStage) : 90);
   const [won,       setWon]       = useState(false);
   const [gameOver,  setGameOver]  = useState(false);
   const [paused,    setPaused]    = useState(false);
-  const [starsWon,  setStarsWon]  = useState<1|2|3>(1);
   const [clearSecs, setClearSecs] = useState(0);
   const [mazeVer,   setMazeVer]   = useState(0);
   const [bestScore, setBestScore] = useState(0); // time attack
@@ -186,13 +208,19 @@ export default function MazeGame() {
   function initLevel(stg: number, curLives: number) {
     clearInterval(timerIdRef.current);
 
-    const seed = isAdventure ? stageSeed(stg, ROWS) : undefined;
+    // Recompute layout for this stage (may change COLS/CELL/ROWS)
+    layoutRef.current = computeLayout(stg, availH);
+    const { COLS, CELL, ROWS, EMOJI_SZ } = layoutRef.current;
+
+    const seed = isAdventure ? stageSeed(stg, ROWS, COLS) : undefined;
     mazeRef.current   = generateMaze(ROWS, COLS, seed);
     playerRef.current = { r: 0, c: 0 };
     wonRef.current    = false;
     deadRef.current   = false;
     stageRef.current  = stg;
     livesRef.current  = curLives;
+
+    if (isAdventure) GameProgress.save(stg, curLives);
 
     const t = isAdventure ? stageTime(stg) : 90;
     timeRef.current = t;
@@ -208,7 +236,6 @@ export default function MazeGame() {
     setTimeLeft(t);
     setWon(false);
     setGameOver(false);
-    setStarsWon(1);
     setMazeVer((v) => v + 1);
 
     // Start timer
@@ -225,6 +252,7 @@ export default function MazeGame() {
         setLives(nl);
         if (nl <= 0) {
           deadRef.current = true;
+          GameProgress.reset();
           setGameOver(true);
         } else {
           initLevel(stageRef.current, nl);
@@ -234,7 +262,7 @@ export default function MazeGame() {
   }
 
   useEffect(() => {
-    initLevel(initStage, isAdventure ? 3 : 1);
+    initLevel(initStage, initLives);
     return () => {
       clearInterval(timerIdRef.current);
       clearInterval(dpadIdRef.current);
@@ -255,6 +283,7 @@ export default function MazeGame() {
 
     if (!blocked) {
       const nr = r + dr, nc = c + dc;
+      const { ROWS, COLS, CELL, EMOJI_SZ } = layoutRef.current;
       if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
         playerRef.current = { r: nr, c: nc };
 
@@ -277,7 +306,6 @@ export default function MazeGame() {
             const used   = total - timeRef.current;
             const earned = calcStars(used, total);
             setClearSecs(used);
-            setStarsWon(earned);
             playClearAnim(earned);
           } else {
             if (timeRef.current > bestScore) setBestScore(timeRef.current);
@@ -325,7 +353,7 @@ export default function MazeGame() {
       onPanResponderMove: (_, gs) => {
         const relX = gs.dx - dragBaseRef.current.x;
         const relY = gs.dy - dragBaseRef.current.y;
-        const thr  = CELL * 0.55; // ~55 % of a cell triggers a step
+        const thr  = layoutRef.current.CELL * 0.55; // ~55 % of a cell triggers a step
 
         if (Math.abs(relX) >= Math.abs(relY)) {
           // horizontal dominant
@@ -356,12 +384,13 @@ export default function MazeGame() {
 
   // ── Wall segments (only recomputed on new maze) ───────────────────────────
   const wallSegs = useMemo(
-    () => buildWalls(mazeRef.current, ROWS),
+    () => buildWalls(mazeRef.current, layoutRef.current),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mazeVer]
   );
 
   // ── Derived ──────────────────────────────────────────────────────────────────
+  const { COLS, CELL, ROWS, MAZE_W, MAZE_H, EMOJI_SZ } = layoutRef.current;
   const goalX   = WALL + (COLS-1) * CELL + (CELL - EMOJI_SZ) / 2;
   const goalY   = WALL + (ROWS-1) * CELL + (CELL - EMOJI_SZ) / 2;
   const hearts  = '❤️ '.repeat(lives).trim() || '💔';
@@ -434,6 +463,7 @@ export default function MazeGame() {
       <View
         style={[styles.mazeFrame, { width: MAZE_W + 8, height: MAZE_H + 8 }]}
         {...pan.panHandlers}
+        key={`maze-${COLS}`}
       >
         <View style={[styles.mazeInner, { width: MAZE_W, height: MAZE_H }]}>
           {wallSegs.map((s) => (
@@ -526,9 +556,6 @@ export default function MazeGame() {
             <Text style={styles.clearTime}>
               Clear Time: {fmtTime(clearSecs)}
             </Text>
-            {starsWon === 3 && (
-              <Text style={styles.bonusLine}>🎁 Bonus life earned!</Text>
-            )}
 
             <View style={styles.clearBtns}>
               <TouchableOpacity
@@ -546,7 +573,7 @@ export default function MazeGame() {
               <TouchableOpacity
                 style={[styles.cBtn, styles.cBtnNext]}
                 onPress={() =>
-                  initLevel(stage + 1, Math.min(lives + (starsWon === 3 ? 1 : 0), 5))
+                  initLevel(stage + 1, lives)
                 }
               >
                 <Text style={styles.cBtnTxt}>NEXT{'\n'}▶</Text>

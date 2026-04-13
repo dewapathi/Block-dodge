@@ -4,7 +4,8 @@
  */
 
 import { router } from 'expo-router';
-import { useEffect, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -14,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GameProgress } from '@/utils/gameProgress';
 
 const { width: W } = Dimensions.get('window');
 
@@ -31,6 +33,16 @@ const STARS = [
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+
+  // ── Saved adventure progress — reloads from disk every time screen focuses ───
+  // useFocusEffect fires whether the screen is re-mounted (router.replace) OR
+  // just restored from the stack (device back button), so progress is always fresh.
+  const [savedProgress, setSavedProgress] = useState(GameProgress.get());
+  useFocusEffect(
+    useCallback(() => {
+      GameProgress.load().then(setSavedProgress);
+    }, [])
+  );
 
   // ── Animation values ────────────────────────────────────────────────────────
   const titleY    = useRef(new Animated.Value(-120)).current;
@@ -120,12 +132,25 @@ export default function HomeScreen() {
         <Animated.View style={[styles.halfCard, { transform: [{ translateX: card1X }] }]}>
           <TouchableOpacity
             style={[styles.card, styles.adventureCard]}
-            onPress={() => router.push('/maze?mode=adventure&stage=1')}
+            onPress={() => {
+              const p = savedProgress;
+              router.push(
+                p
+                  ? `/maze?mode=adventure&stage=${p.stage}&lives=${p.lives}`
+                  : '/maze?mode=adventure&stage=1&lives=3'
+              );
+            }}
             activeOpacity={0.82}
           >
             <Text style={styles.cardEmoji}>🗺️</Text>
-            <Text style={[styles.cardTitle, { color: '#4ade80' }]}>ADVENTURE</Text>
-            <Text style={styles.cardDesc}>{'Explore magical worlds\nEarn ⭐ stars!'}</Text>
+            <Text style={[styles.cardTitle, { color: '#4ade80' }]}>
+              {savedProgress ? 'CONTINUE' : 'ADVENTURE'}
+            </Text>
+            <Text style={styles.cardDesc}>
+              {savedProgress
+                ? `Stage ${savedProgress.stage}  ·  ${'❤️'.repeat(savedProgress.lives)}`
+                : 'Explore magical worlds\nEarn ⭐ stars!'}
+            </Text>
           </TouchableOpacity>
         </Animated.View>
 
