@@ -120,6 +120,7 @@ export default function MazeGame() {
   const timeRef    = useRef(isAdventure ? stageTime(initStage) : 90);
   const timerIdRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const dpadIdRef  = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const pausedRef  = useRef(false);
 
   const playerAnim = useRef(new Animated.ValueXY({
     x: WALL + (CELL - EMOJI_SZ) / 2,
@@ -141,6 +142,7 @@ export default function MazeGame() {
   const [timeLeft,  setTimeLeft]  = useState(isAdventure ? stageTime(initStage) : 90);
   const [won,       setWon]       = useState(false);
   const [gameOver,  setGameOver]  = useState(false);
+  const [paused,    setPaused]    = useState(false);
   const [starsWon,  setStarsWon]  = useState<1|2|3>(1);
   const [clearSecs, setClearSecs] = useState(0);
   const [mazeVer,   setMazeVer]   = useState(0);
@@ -212,7 +214,7 @@ export default function MazeGame() {
     // Start timer
     clearInterval(timerIdRef.current);
     timerIdRef.current = setInterval(() => {
-      if (wonRef.current || deadRef.current) return;
+      if (wonRef.current || deadRef.current || pausedRef.current) return;
       timeRef.current -= 1;
       setTimeLeft(timeRef.current);
 
@@ -242,7 +244,7 @@ export default function MazeGame() {
 
   // ── Move ─────────────────────────────────────────────────────────────────────
   function move(dr: number, dc: number) {
-    if (wonRef.current || deadRef.current) return;
+    if (wonRef.current || deadRef.current || pausedRef.current) return;
     const { r, c } = playerRef.current;
     const cell = mazeRef.current[r]?.[c];
     if (!cell) return;
@@ -293,6 +295,18 @@ export default function MazeGame() {
     dpadIdRef.current = setInterval(() => move(dr, dc), 150);
   }
   function stopMove() { clearInterval(dpadIdRef.current); }
+
+  // ── Pause / Resume ───────────────────────────────────────────────────────────
+  function pauseGame() {
+    if (wonRef.current || deadRef.current) return;
+    pausedRef.current = true;
+    setPaused(true);
+    clearInterval(dpadIdRef.current);
+  }
+  function resumeGame() {
+    pausedRef.current = false;
+    setPaused(false);
+  }
 
   // ── Swipe ────────────────────────────────────────────────────────────────────
   const pan = useRef(
@@ -371,6 +385,17 @@ export default function MazeGame() {
               </Text>
             </View>
           </>
+        )}
+
+        {/* ── Pause button — lives-side, inside HUD ── */}
+        {!won && !gameOver && (
+          <TouchableOpacity
+            style={styles.pauseBtn}
+            onPress={paused ? resumeGame : pauseGame}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.pauseBtnTxt}>{paused ? '▶' : '⏸'}</Text>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -521,6 +546,38 @@ export default function MazeGame() {
         </View>
       )}
 
+      {/* ════════ PAUSE MENU ════════ */}
+      {paused && (
+        <View style={styles.overlay}>
+          <Text style={styles.pauseTitle}>⏸  PAUSED</Text>
+
+          <TouchableOpacity
+            style={[styles.pauseMenuBtn, { backgroundColor: '#166534' }]}
+            onPress={resumeGame}
+          >
+            <Text style={styles.pauseMenuTxt}>▶  Resume</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.pauseMenuBtn, { backgroundColor: '#1d4ed8' }]}
+            onPress={() => {
+              pausedRef.current = false;
+              setPaused(false);
+              initLevel(stageRef.current, livesRef.current);
+            }}
+          >
+            <Text style={styles.pauseMenuTxt}>🔄  Restart Stage</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.pauseMenuBtn, { backgroundColor: '#374151' }]}
+            onPress={() => router.replace('/home')}
+          >
+            <Text style={styles.pauseMenuTxt}>🏠  Home</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* ════════ GAME OVER ════════ */}
       {gameOver && (
         <View style={styles.overlay}>
@@ -575,7 +632,8 @@ const styles = StyleSheet.create({
     backgroundColor: C_HUD,
     borderBottomWidth: 2,
     borderBottomColor: C_GOLD,
-    paddingHorizontal: 10,
+    paddingLeft: 10,
+    paddingRight: 62,  // reserve space for the 42px pause button + 10px margin
     shadowColor: C_GOLD,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.35,
@@ -695,6 +753,47 @@ const styles = StyleSheet.create({
   taScore:   { color: C_GOLD, fontSize: 48, fontWeight: 'bold', marginBottom: 8 },
   taNewBest: { color: '#4ade80', fontSize: 18, fontWeight: 'bold', marginBottom: 28 },
   taBtns:    { flexDirection: 'row', gap: 16 },
+
+  // Pause button — absolutely positioned inside the HUD view
+  pauseBtn: {
+    position: 'absolute',
+    right: 10,
+    top: (92 - 42) / 2,   // vertically centred in 92 px HUD
+    backgroundColor: '#1e0a4a',
+    borderWidth: 2,
+    borderColor: C_PURPLE,
+    borderRadius: 10,
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: C_PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  pauseBtnTxt: { color: '#e9d5ff', fontSize: 18 },
+
+  // Pause menu
+  pauseTitle: {
+    color: C_GOLD,
+    fontSize: 34,
+    fontWeight: 'bold',
+    marginBottom: 32,
+    textShadowColor: C_GOLD,
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 14,
+  },
+  pauseMenuBtn: {
+    width: '72%',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginBottom: 14,
+    elevation: 6,
+  },
+  pauseMenuTxt: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
   // Game Over
   goEmoji: { fontSize: 80, marginBottom: 6 },
