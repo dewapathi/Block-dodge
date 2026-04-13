@@ -252,7 +252,9 @@ export default function MazeGame() {
         setLives(nl);
         if (nl <= 0) {
           deadRef.current = true;
-          GameProgress.reset();
+          // Keep progress at the current stage with fresh lives so the user
+          // can resume from the same stage whether they press "Try Again" or "Home".
+          if (isAdventure) GameProgress.save(stageRef.current, 3);
           setGameOver(true);
         } else {
           initLevel(stageRef.current, nl);
