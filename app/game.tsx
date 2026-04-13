@@ -1,181 +1,197 @@
+/**
+ * Dragon Dodge 🧙‍♂️
+ * Wizard moves left/right to dodge falling fireballs.
+ * Score increases each time a fireball passes safely.
+ */
+
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-const PLAYER_W = 64;
-const PLAYER_H = 22;
-const OBSTACLE_W = 52;
-const OBSTACLE_H = 22;
-const PLAYER_Y = SCREEN_H - 160;
-const MOVE_STEP = 18;
-const INITIAL_SPEED = 5;
+const PLAYER_W  = 52;
+const PLAYER_H  = 52;   // emoji hitbox
+const OBSTACLE_W = 46;
+const OBSTACLE_H = 46;
+const PLAYER_Y  = SCREEN_H - 170;
+const MOVE_STEP = 20;
+const INIT_SPEED = 5;
 
-function randomObstacleX() {
-  return Math.random() * (SCREEN_W - OBSTACLE_W);
-}
+// Decorative background stars (fixed, not animated for perf)
+const BG_STARS = [
+  { t: 90,  l: 30,  e: '✨', s: 14 },
+  { t: 140, l: 340, e: '⭐', s: 12 },
+  { t: 200, l: 15,  e: '💫', s: 16 },
+  { t: 280, l: 360, e: '✨', s: 12 },
+  { t: 420, l: 20,  e: '⭐', s: 14 },
+  { t: 500, l: 350, e: '🌟', s: 12 },
+];
+
+function rndX() { return Math.random() * (SCREEN_W - OBSTACLE_W); }
 
 export default function GameScreen() {
-  const playerXRef = useRef((SCREEN_W - PLAYER_W) / 2);
-  const obstacleXRef = useRef(randomObstacleX());
-  const obstacleYRef = useRef(-OBSTACLE_H);
+  // ── Refs (never stale in the interval) ──────────────────────────────────────
+  const pxRef    = useRef((SCREEN_W - PLAYER_W) / 2);
+  const oxRef    = useRef(rndX());
+  const oyRef    = useRef(-OBSTACLE_H);
   const scoreRef = useRef(0);
-  const speedRef = useRef(INITIAL_SPEED);
-  const gameOverRef = useRef(false);
+  const speedRef = useRef(INIT_SPEED);
+  const deadRef  = useRef(false);
 
-  const [playerX, setPlayerX] = useState(playerXRef.current);
-  const [obstacleX, setObstacleX] = useState(obstacleXRef.current);
-  const [obstacleY, setObstacleY] = useState(obstacleYRef.current);
-  const [score, setScore] = useState(0);
+  // ── State (triggers re-renders) ──────────────────────────────────────────────
+  const [px,       setPx]       = useState(pxRef.current);
+  const [ox,       setOx]       = useState(oxRef.current);
+  const [oy,       setOy]       = useState(oyRef.current);
+  const [score,    setScore]    = useState(0);
   const [gameOver, setGameOver] = useState(false);
 
-  // Continuous press intervals
-  const leftInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const rightInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const leftRef  = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const rightRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
+  // ── Movement ─────────────────────────────────────────────────────────────────
   const moveLeft = () => {
-    playerXRef.current = Math.max(0, playerXRef.current - MOVE_STEP);
-    setPlayerX(playerXRef.current);
+    pxRef.current = Math.max(0, pxRef.current - MOVE_STEP);
+    setPx(pxRef.current);
   };
-
   const moveRight = () => {
-    playerXRef.current = Math.min(SCREEN_W - PLAYER_W, playerXRef.current + MOVE_STEP);
-    setPlayerX(playerXRef.current);
+    pxRef.current = Math.min(SCREEN_W - PLAYER_W, pxRef.current + MOVE_STEP);
+    setPx(pxRef.current);
   };
-
   const startLeft = () => {
-    if (gameOverRef.current) return;
+    if (deadRef.current) return;
     moveLeft();
-    leftInterval.current = setInterval(() => {
-      if (!gameOverRef.current) moveLeft();
-    }, 60);
+    leftRef.current = setInterval(() => { if (!deadRef.current) moveLeft(); }, 60);
   };
-
   const stopLeft = () => {
-    if (leftInterval.current) {
-      clearInterval(leftInterval.current);
-      leftInterval.current = null;
-    }
+    clearInterval(leftRef.current);
+    leftRef.current = undefined;
   };
-
   const startRight = () => {
-    if (gameOverRef.current) return;
+    if (deadRef.current) return;
     moveRight();
-    rightInterval.current = setInterval(() => {
-      if (!gameOverRef.current) moveRight();
-    }, 60);
+    rightRef.current = setInterval(() => { if (!deadRef.current) moveRight(); }, 60);
   };
-
   const stopRight = () => {
-    if (rightInterval.current) {
-      clearInterval(rightInterval.current);
-      rightInterval.current = null;
-    }
+    clearInterval(rightRef.current);
+    rightRef.current = undefined;
   };
 
+  // ── Restart ───────────────────────────────────────────────────────────────────
   const restart = () => {
-    playerXRef.current = (SCREEN_W - PLAYER_W) / 2;
-    obstacleXRef.current = randomObstacleX();
-    obstacleYRef.current = -OBSTACLE_H;
+    pxRef.current    = (SCREEN_W - PLAYER_W) / 2;
+    oxRef.current    = rndX();
+    oyRef.current    = -OBSTACLE_H;
     scoreRef.current = 0;
-    speedRef.current = INITIAL_SPEED;
-    gameOverRef.current = false;
-
-    setPlayerX(playerXRef.current);
-    setObstacleX(obstacleXRef.current);
-    setObstacleY(obstacleYRef.current);
+    speedRef.current = INIT_SPEED;
+    deadRef.current  = false;
+    setPx(pxRef.current);
+    setOx(oxRef.current);
+    setOy(oyRef.current);
     setScore(0);
     setGameOver(false);
   };
 
-  // Game loop
+  // ── Game loop (~60 fps) ───────────────────────────────────────────────────────
   useEffect(() => {
     const loop = setInterval(() => {
-      if (gameOverRef.current) return;
+      if (deadRef.current) return;
 
-      // Drop obstacle
-      obstacleYRef.current += speedRef.current;
+      oyRef.current += speedRef.current;
 
-      // Off-screen: reset and score
-      if (obstacleYRef.current > SCREEN_H) {
-        obstacleYRef.current = -OBSTACLE_H;
-        obstacleXRef.current = randomObstacleX();
+      // Fireball exited screen → new one, score++
+      if (oyRef.current > SCREEN_H) {
+        oyRef.current    = -OBSTACLE_H;
+        oxRef.current    = rndX();
         scoreRef.current += 1;
-        speedRef.current = INITIAL_SPEED + scoreRef.current * 0.6;
+        speedRef.current = INIT_SPEED + scoreRef.current * 0.55;
         setScore(scoreRef.current);
       }
 
       // Collision (AABB)
-      const px = playerXRef.current;
-      const ox = obstacleXRef.current;
-      const oy = obstacleYRef.current;
-
-      const hit =
-        ox < px + PLAYER_W &&
-        ox + OBSTACLE_W > px &&
-        oy < PLAYER_Y + PLAYER_H &&
-        oy + OBSTACLE_H > PLAYER_Y;
-
-      if (hit) {
-        gameOverRef.current = true;
+      if (
+        oxRef.current < pxRef.current + PLAYER_W &&
+        oxRef.current + OBSTACLE_W > pxRef.current &&
+        oyRef.current < PLAYER_Y + PLAYER_H &&
+        oyRef.current + OBSTACLE_H > PLAYER_Y
+      ) {
+        deadRef.current = true;
         setGameOver(true);
         return;
       }
 
-      setObstacleY(obstacleYRef.current);
-      setObstacleX(obstacleXRef.current);
+      setOy(oyRef.current);
+      setOx(oxRef.current);
     }, 16);
 
     return () => clearInterval(loop);
   }, []);
 
-  // Clean up press intervals on unmount
-  useEffect(() => {
-    return () => {
-      stopLeft();
-      stopRight();
-    };
-  }, []);
+  // Cleanup press intervals on unmount
+  useEffect(() => () => { stopLeft(); stopRight(); }, []);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.score}>{score}</Text>
+    <View style={styles.root}>
+      {/* Background stars */}
+      {BG_STARS.map((s, i) => (
+        <Text key={i} style={[styles.bgStar, { top: s.t, left: s.l, fontSize: s.s }]}>
+          {s.e}
+        </Text>
+      ))}
 
-      {/* Falling obstacle */}
-      <View style={[styles.obstacle, { left: obstacleX, top: obstacleY }]} />
+      {/* ── Score HUD ── */}
+      <View style={styles.scoreBox}>
+        <Text style={styles.scoreLabel}>⭐  SCORE</Text>
+        <Text style={styles.scoreNum}>{score}</Text>
+      </View>
 
-      {/* Player */}
-      <View style={[styles.player, { left: playerX, top: PLAYER_Y }]} />
+      {/* ── Falling fireball ── */}
+      <Text style={[styles.fireball, { left: ox, top: oy }]}>🔥</Text>
 
-      {/* Controls */}
+      {/* ── Wizard player ── */}
+      <Text style={[styles.wizard, { left: px, top: PLAYER_Y }]}>🧙‍♂️</Text>
+
+      {/* ── Ground line ── */}
+      <View style={styles.ground} />
+
+      {/* ── Controls ── */}
       <View style={styles.controls}>
         <TouchableOpacity
-          style={styles.button}
+          style={[styles.btn, styles.btnLeft]}
           onPressIn={startLeft}
           onPressOut={stopLeft}
-          activeOpacity={0.7}>
-          <Text style={styles.buttonText}>◀</Text>
+          activeOpacity={0.7}
+        >
+          <Text style={styles.btnTxt}>◀</Text>
         </TouchableOpacity>
+
+        <View style={styles.btnMid}>
+          <Text style={styles.holdHint}>Hold to move</Text>
+        </View>
+
         <TouchableOpacity
-          style={styles.button}
+          style={[styles.btn, styles.btnRight]}
           onPressIn={startRight}
           onPressOut={stopRight}
-          activeOpacity={0.7}>
-          <Text style={styles.buttonText}>▶</Text>
+          activeOpacity={0.7}
+        >
+          <Text style={styles.btnTxt}>▶</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Game Over overlay */}
+      {/* ── Game Over overlay ── */}
       {gameOver && (
         <View style={styles.overlay}>
-          <Text style={styles.gameOverTitle}>Game Over</Text>
-          <Text style={styles.finalScore}>Score: {score}</Text>
-          <TouchableOpacity style={styles.restartBtn} onPress={restart}>
-            <Text style={styles.restartText}>Play Again</Text>
+          <Text style={styles.oopsEmoji}>💫</Text>
+          <Text style={styles.oopsTitle}>Oops!</Text>
+          <Text style={styles.oopsSub}>A fireball got the wizard!</Text>
+          <Text style={styles.oopsScore}>⭐  Score: {score}</Text>
+
+          <TouchableOpacity style={styles.replayBtn} onPress={restart}>
+            <Text style={styles.replayTxt}>🎮  Play Again!</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.homeBtn} onPress={() => router.back()}>
-            <Text style={styles.homeText}>Home</Text>
+            <Text style={styles.homeTxt}>🏠  Home</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -184,91 +200,148 @@ export default function GameScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#0a0a1a',
+    backgroundColor: '#08051e',
   },
-  score: {
+
+  bgStar: {
     position: 'absolute',
-    top: 56,
+    opacity: 0.45,
+  },
+
+  // ── HUD ──────────────────────────────────────────────────────────────────────
+  scoreBox: {
+    position: 'absolute',
+    top: 52,
     alignSelf: 'center',
-    color: '#fff',
-    fontSize: 32,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 2,
+    borderColor: '#FFD700',
+    borderRadius: 18,
+    paddingHorizontal: 28,
+    paddingVertical: 8,
+    shadowColor: '#FFD700',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  scoreLabel: {
+    color: '#FFD700',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  scoreNum: {
+    color: '#ffffff',
+    fontSize: 36,
     fontWeight: 'bold',
-    opacity: 0.8,
+    lineHeight: 42,
   },
-  player: {
+
+  // ── Characters ───────────────────────────────────────────────────────────────
+  fireball: {
     position: 'absolute',
-    width: PLAYER_W,
-    height: PLAYER_H,
-    backgroundColor: '#00d4ff',
-    borderRadius: 5,
-  },
-  obstacle: {
-    position: 'absolute',
+    fontSize: 40,
     width: OBSTACLE_W,
     height: OBSTACLE_H,
-    backgroundColor: '#ff4040',
-    borderRadius: 5,
+    textAlign: 'center',
   },
+  wizard: {
+    position: 'absolute',
+    fontSize: 42,
+    width: PLAYER_W,
+    height: PLAYER_H,
+    textAlign: 'center',
+  },
+
+  ground: {
+    position: 'absolute',
+    bottom: 138,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+
+  // ── Controls ─────────────────────────────────────────────────────────────────
   controls: {
     position: 'absolute',
-    bottom: 48,
+    bottom: 38,
     left: 0,
     right: 0,
     flexDirection: 'row',
     justifyContent: 'space-around',
-    paddingHorizontal: 32,
+    alignItems: 'center',
+    paddingHorizontal: 20,
   },
-  button: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: '#1e1e2e',
-    borderWidth: 2,
-    borderColor: '#333',
+  btn: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 8,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 34,
+  btnLeft: {
+    backgroundColor: '#1e0a4a',
+    borderWidth: 3,
+    borderColor: '#7c3aed',
+    shadowColor: '#7c3aed',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.75,
+    shadowRadius: 14,
   },
+  btnRight: {
+    backgroundColor: '#1e0a4a',
+    borderWidth: 3,
+    borderColor: '#7c3aed',
+    shadowColor: '#7c3aed',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.75,
+    shadowRadius: 14,
+  },
+  btnTxt: {
+    color: '#c4b5fd',
+    fontSize: 36,
+  },
+  btnMid: { alignItems: 'center' },
+  holdHint: { color: 'rgba(255,255,255,0.25)', fontSize: 11 },
+
+  // ── Game Over ────────────────────────────────────────────────────────────────
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.82)',
+    backgroundColor: 'rgba(4,2,18,0.92)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  gameOverTitle: {
-    color: '#ff4040',
-    fontSize: 52,
+  oopsEmoji: { fontSize: 80, marginBottom: 4 },
+  oopsTitle: {
+    color: '#FFD700',
+    fontSize: 56,
     fontWeight: 'bold',
-    marginBottom: 16,
+    textShadowColor: '#FFD700',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 20,
+    marginBottom: 6,
   },
-  finalScore: {
-    color: '#fff',
-    fontSize: 28,
-    marginBottom: 48,
-  },
-  restartBtn: {
-    backgroundColor: '#00d4ff',
-    paddingHorizontal: 56,
+  oopsSub:   { color: '#c4b5fd', fontSize: 18, marginBottom: 10 },
+  oopsScore: { color: '#FFD700', fontSize: 30, fontWeight: 'bold', marginBottom: 40 },
+  replayBtn: {
+    backgroundColor: '#7c3aed',
+    paddingHorizontal: 52,
     paddingVertical: 16,
-    borderRadius: 10,
-    marginBottom: 18,
+    borderRadius: 50,
+    marginBottom: 16,
+    shadowColor: '#7c3aed',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    shadowRadius: 16,
+    elevation: 10,
   },
-  restartText: {
-    color: '#000',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  homeBtn: {
-    paddingHorizontal: 56,
-    paddingVertical: 14,
-  },
-  homeText: {
-    color: '#888',
-    fontSize: 18,
-  },
+  replayTxt: { color: '#fff', fontSize: 21, fontWeight: 'bold' },
+  homeBtn:   { paddingHorizontal: 52, paddingVertical: 14 },
+  homeTxt:   { color: '#888', fontSize: 18 },
 });
