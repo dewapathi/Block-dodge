@@ -54,3 +54,24 @@ export const GameProgress = {
     return _loaded;
   },
 };
+
+// ── Time Attack best score ────────────────────────────────────────────────────
+const TA_KEY = 'enchanted_maze_ta_best';
+let _taBest = 0;
+
+export const TimeAttackBest = {
+  async load(): Promise<number> {
+    try {
+      const raw = await SecureStore.getItemAsync(TA_KEY);
+      _taBest = raw ? parseInt(raw, 10) : 0;
+    } catch {
+      _taBest = 0;
+    }
+    return _taBest;
+  },
+  get(): number { return _taBest; },
+  save(score: number): void {
+    _taBest = score;
+    SecureStore.setItemAsync(TA_KEY, String(score)).catch(() => {});
+  },
+};

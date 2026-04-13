@@ -2,7 +2,7 @@
  * Enchanted Maze — Game Screen
  *
  * Mode "adventure" : seeded stages, 3 lives, ⭐ star rating, stage-clear overlay
- * Mode "time"      : random maze, 90 s countdown, beat your best score
+ * Mode "time"      : chain mazes — each solved adds +15 s, score = mazes completed
  *
  * Controls: hold D-pad buttons  OR  swipe on the maze
  */
@@ -21,7 +21,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { generateMaze, MazeGrid } from '@/utils/mazeGenerator';
-import { GameProgress } from '@/utils/gameProgress';
+import { GameProgress, TimeAttackBest } from '@/utils/gameProgress';
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -159,6 +159,10 @@ export default function MazeGame() {
   const confettiY  = useRef(new Animated.Value(-80));
   const confettiOp = useRef(new Animated.Value(0));
 
+  // Time Attack bonus-flash animation
+  const bonusY  = useRef(new Animated.Value(0));
+  const bonusOp = useRef(new Animated.Value(0));
+
   // ── State ───────────────────────────────────────────────────────────────────
   const [stage,     setStage]     = useState(initStage);
   const [lives,     setLives]     = useState(initLives);
@@ -168,7 +172,19 @@ export default function MazeGame() {
   const [paused,    setPaused]    = useState(false);
   const [clearSecs, setClearSecs] = useState(0);
   const [mazeVer,   setMazeVer]   = useState(0);
-  const [bestScore, setBestScore] = useState(0); // time attack
+  const mazesCompletedRef = useRef(0);
+  const taBestRef         = useRef(TimeAttackBest.get());
+  const [mazesCompleted, setMazesCompleted] = useState(0);
+  const [taBest,         setTaBest]         = useState(TimeAttackBest.get());
+  const [isNewRecord,    setIsNewRecord]    = useState(false);
+
+  // ── Load Time Attack best from disk ──────────────────────────────────────────
+  useEffect(() => {
+    if (!isAdventure) {
+      TimeAttackBest.load().then(v => { taBestRef.current = v; setTaBest(v); });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Pulsing goal ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -204,6 +220,56 @@ export default function MazeGame() {
     setTimeout(() => Animated.spring(s3Anim.current, { toValue: earned >= 3 ? 1 : 0.35, tension: 90, friction: 5, useNativeDriver: true }).start(), 960);
   }
 
+  // ── Time Attack bonus flash ───────────────────────────────────────────────
+  function flashBonus() {
+    bonusY.current.setValue(0);
+    bonusOp.current.setValue(1);
+    Animated.parallel([
+      Animated.timing(bonusOp.current, { toValue: 0, duration: 1400, useNativeDriver: true }),
+      Animated.timing(bonusY.current,  { toValue: -80, duration: 1400, useNativeDriver: true }),
+    ]).start();
+  }
+
+  // ── Timer (shared by initLevel and nextTAMaze) ────────────────────────────
+  function startTimer() {
+    clearInterval(timerIdRef.current);
+    timerIdRef.current = setInterval(() => {
+      if (wonRef.current || deadRef.current || pausedRef.current) return;
+      timeRef.current -= 1;
+      setTimeLeft(timeRef.current);
+
+      if (timeRef.current <= 0) {
+        clearInterval(timerIdRef.current);
+
+        if (isAdventure) {
+          const nl = livesRef.current - 1;
+          livesRef.current = nl;
+          setLives(nl);
+          if (nl <= 0) {
+            deadRef.current = true;
+            GameProgress.save(stageRef.current, 3);
+            setGameOver(true);
+          } else {
+            initLevel(stageRef.current, nl);
+          }
+        } else {
+          // Time Attack: time ran out → game over
+          const count = mazesCompletedRef.current;
+          if (count > taBestRef.current) {
+            TimeAttackBest.save(count);
+            taBestRef.current = count;
+            setTaBest(count);
+            setIsNewRecord(true);
+          } else {
+            setIsNewRecord(false);
+          }
+          deadRef.current = true;
+          setGameOver(true);
+        }
+      }
+    }, 1000);
+  }
+
   // ── Level init ────────────────────────────────────────────────────────────
   function initLevel(stg: number, curLives: number) {
     clearInterval(timerIdRef.current);
@@ -222,6 +288,12 @@ export default function MazeGame() {
 
     if (isAdventure) GameProgress.save(stg, curLives);
 
+    if (!isAdventure) {
+      mazesCompletedRef.current = 0;
+      setMazesCompleted(0);
+      setIsNewRecord(false);
+    }
+
     const t = isAdventure ? stageTime(stg) : 90;
     timeRef.current = t;
 
@@ -238,29 +310,7 @@ export default function MazeGame() {
     setGameOver(false);
     setMazeVer((v) => v + 1);
 
-    // Start timer
-    clearInterval(timerIdRef.current);
-    timerIdRef.current = setInterval(() => {
-      if (wonRef.current || deadRef.current || pausedRef.current) return;
-      timeRef.current -= 1;
-      setTimeLeft(timeRef.current);
-
-      if (timeRef.current <= 0) {
-        clearInterval(timerIdRef.current);
-        const nl = livesRef.current - 1;
-        livesRef.current = nl;
-        setLives(nl);
-        if (nl <= 0) {
-          deadRef.current = true;
-          // Keep progress at the current stage with fresh lives so the user
-          // can resume from the same stage whether they press "Try Again" or "Home".
-          if (isAdventure) GameProgress.save(stageRef.current, 3);
-          setGameOver(true);
-        } else {
-          initLevel(stageRef.current, nl);
-        }
-      }
-    }, 1000);
+    startTimer();
   }
 
   useEffect(() => {
@@ -271,6 +321,37 @@ export default function MazeGame() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Next Time Attack maze — chains seamlessly, timer keeps running + 15 s ──
+  function nextTAMaze(count: number) {
+    // Add bonus time
+    const newTime = timeRef.current + 15;
+    timeRef.current = newTime;
+    setTimeLeft(newTime);
+
+    mazesCompletedRef.current = count;
+    setMazesCompleted(count);
+
+    // Progressive difficulty: reuse colsForStage with count as the "stage"
+    layoutRef.current = computeLayout(count, availH);
+    const { COLS, CELL, ROWS, EMOJI_SZ } = layoutRef.current;
+
+    mazeRef.current   = generateMaze(ROWS, COLS); // random — no seed
+    playerRef.current = { r: 0, c: 0 };
+    wonRef.current    = false;
+
+    playerAnim.current.stopAnimation();
+    playerAnim.current.setValue({
+      x: WALL + (CELL - EMOJI_SZ) / 2,
+      y: WALL + (CELL - EMOJI_SZ) / 2,
+    });
+
+    setWon(false);
+    setMazeVer((v) => v + 1);
+
+    flashBonus();
+    startTimer();
+  }
 
   // ── Move ─────────────────────────────────────────────────────────────────────
   function move(dr: number, dc: number) {
@@ -309,10 +390,11 @@ export default function MazeGame() {
             const earned = calcStars(used, total);
             setClearSecs(used);
             playClearAnim(earned);
+            setWon(true);
           } else {
-            if (timeRef.current > bestScore) setBestScore(timeRef.current);
+            // Time Attack: chain to next maze seamlessly — no win overlay
+            nextTAMaze(mazesCompletedRef.current + 1);
           }
-          setWon(true);
         }
       }
     }
@@ -435,16 +517,21 @@ export default function MazeGame() {
         ) : (
           <>
             <View style={styles.hudBlock}>
-              <Text style={styles.hudSmall}>⚡ TIME ATTACK</Text>
+              <Text style={styles.hudSmall}>⚡ MAZES</Text>
+              <Text style={[styles.hudBig, { color: '#fb923c' }]}>{mazesCompleted}</Text>
+              <Text style={styles.hudTiny}>solved</Text>
+            </View>
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>TIME LEFT</Text>
               <Text style={[styles.hudBig, { color: '#fb923c' }, timeLeft <= 10 && styles.timeWarn]}>
                 {fmtTime(timeLeft)}
               </Text>
+              <Text style={styles.hudTiny}>{timeLeft <= 10 ? '⚠️ hurry!' : '+15s per maze'}</Text>
             </View>
             <View style={styles.hudBlock}>
               <Text style={styles.hudSmall}>🏆 BEST</Text>
-              <Text style={[styles.hudBig, { color: C_GOLD }]}>
-                {bestScore > 0 ? fmtTime(bestScore) : '--:--'}
-              </Text>
+              <Text style={[styles.hudBig, { color: C_GOLD }]}>{taBest > 0 ? String(taBest) : '--'}</Text>
+              <Text style={styles.hudTiny}>mazes</Text>
             </View>
           </>
         )}
@@ -585,25 +672,16 @@ export default function MazeGame() {
         </View>
       )}
 
-      {/* ════════ TIME ATTACK WIN ════════ */}
-      {won && !isAdventure && (
-        <View style={styles.overlay}>
-          <Text style={styles.taEmoji}>⚡</Text>
-          <Text style={styles.taTitle}>Maze Solved!</Text>
-          <Text style={styles.taSub}>Time remaining</Text>
-          <Text style={styles.taScore}>{fmtTime(timeLeft)}</Text>
-          {timeLeft >= bestScore && bestScore > 0 && (
-            <Text style={styles.taNewBest}>🏆 New Best Score!</Text>
-          )}
-          <View style={styles.taBtns}>
-            <TouchableOpacity style={[styles.cBtn, styles.cBtnMenu]} onPress={() => router.replace('/home')}>
-              <Text style={styles.cBtnTxt}>🏠{'\n'}MENU</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.cBtn, styles.cBtnNext]} onPress={() => initLevel(1, 1)}>
-              <Text style={styles.cBtnTxt}>▶{'\n'}AGAIN</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      {/* ════════ TIME ATTACK BONUS FLASH (+15s) ════════ */}
+      {!isAdventure && (
+        <Animated.Text
+          style={[
+            styles.taBonus,
+            { opacity: bonusOp.current, transform: [{ translateY: bonusY.current }] },
+          ]}
+        >
+          +15s ⚡
+        </Animated.Text>
       )}
 
       {/* ════════ PAUSE MENU ════════ */}
@@ -638,21 +716,50 @@ export default function MazeGame() {
         </View>
       )}
 
-      {/* ════════ GAME OVER ════════ */}
-      {gameOver && (
+      {/* ════════ ADVENTURE GAME OVER ════════ */}
+      {gameOver && isAdventure && (
         <View style={styles.overlay}>
           <Text style={styles.goEmoji}>💫</Text>
           <Text style={styles.goTitle}>Oh No!</Text>
           <Text style={styles.goSub}>
-            {isAdventure
-              ? `You reached stage ${stage}\n${worldEmoji(stage)} ${worldName(stage)}`
-              : 'Time ran out!'}
+            {`You reached stage ${stage}\n${worldEmoji(stage)} ${worldName(stage)}`}
           </Text>
           <TouchableOpacity
             style={[styles.cBtn, styles.cBtnNext, { paddingHorizontal: 40, marginBottom: 14 }]}
-            onPress={() => initLevel(isAdventure ? stage : 1, isAdventure ? 3 : 1)}
+            onPress={() => initLevel(stage, 3)}
           >
             <Text style={[styles.cBtnTxt, { fontSize: 17 }]}>🎮  Try Again!</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.replace('/home')}>
+            <Text style={styles.goHome}>🏠  Home</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ════════ TIME ATTACK GAME OVER ════════ */}
+      {gameOver && !isAdventure && (
+        <View style={styles.overlay}>
+          <Text style={styles.taGoLightning}>⚡</Text>
+          <Text style={styles.taGoTimeUp}>Time's Up!</Text>
+          {isNewRecord && (
+            <View style={styles.taRecordBadge}>
+              <Text style={styles.taRecordTxt}>🏆  NEW RECORD!</Text>
+            </View>
+          )}
+          <Text style={styles.taGoNum}>{mazesCompleted}</Text>
+          <Text style={styles.taGoLabel}>MAZES SOLVED</Text>
+          <Text style={styles.taGoBest}>
+            {isNewRecord
+              ? 'Amazing! Personal best!'
+              : taBest > 0
+                ? `Personal best: ${taBest} maze${taBest !== 1 ? 's' : ''}`
+                : 'Complete more mazes next time!'}
+          </Text>
+          <TouchableOpacity
+            style={[styles.cBtn, styles.cBtnTA, { paddingHorizontal: 36, marginTop: 28, marginBottom: 14 }]}
+            onPress={() => initLevel(1, 1)}
+          >
+            <Text style={[styles.cBtnTxt, { fontSize: 17 }]}>⚡  Play Again!</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => router.replace('/home')}>
             <Text style={styles.goHome}>🏠  Home</Text>
@@ -806,13 +913,65 @@ const styles = StyleSheet.create({
   },
   cBtnTxt: { color: '#fff', fontSize: 14, fontWeight: 'bold', textAlign: 'center', lineHeight: 20 },
 
-  // Time Attack Win
-  taEmoji:   { fontSize: 70, marginBottom: 6 },
-  taTitle:   { color: '#fb923c', fontSize: 44, fontWeight: 'bold', marginBottom: 4 },
-  taSub:     { color: '#aaa', fontSize: 16 },
-  taScore:   { color: C_GOLD, fontSize: 48, fontWeight: 'bold', marginBottom: 8 },
-  taNewBest: { color: '#4ade80', fontSize: 18, fontWeight: 'bold', marginBottom: 28 },
-  taBtns:    { flexDirection: 'row', gap: 16 },
+  // Time Attack Bonus Flash
+  taBonus: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '38%',
+    color: '#fb923c',
+    fontSize: 36,
+    fontWeight: 'bold',
+    textShadowColor: '#fb923c',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
+    zIndex: 99,
+  },
+
+  // Time Attack Game Over
+  cBtnTA: {
+    backgroundColor: '#7c2d00',
+    borderWidth: 2,
+    borderColor: '#fb923c',
+    shadowColor: '#fb923c',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 14,
+  },
+  taGoLightning: { fontSize: 76, marginBottom: 2 },
+  taGoTimeUp: {
+    color: '#fb923c',
+    fontSize: 40,
+    fontWeight: 'bold',
+    marginBottom: 12,
+    textShadowColor: '#fb923c',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 16,
+  },
+  taRecordBadge: {
+    backgroundColor: '#7c2d00',
+    borderWidth: 2,
+    borderColor: '#fb923c',
+    borderRadius: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    marginBottom: 12,
+    shadowColor: '#fb923c',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 12,
+  },
+  taRecordTxt: { color: '#fb923c', fontSize: 20, fontWeight: 'bold', letterSpacing: 1 },
+  taGoNum: {
+    color: C_GOLD,
+    fontSize: 88,
+    fontWeight: 'bold',
+    lineHeight: 94,
+    textShadowColor: C_GOLD,
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 24,
+  },
+  taGoLabel: { color: '#fb923c', fontSize: 16, fontWeight: 'bold', letterSpacing: 3, marginBottom: 8 },
+  taGoBest:  { color: '#aaa', fontSize: 15, textAlign: 'center', marginBottom: 4 },
 
   // Pause button — absolutely positioned inside the HUD view
   pauseBtn: {
