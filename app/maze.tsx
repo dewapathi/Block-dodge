@@ -1,10 +1,13 @@
 /**
- * Enchanted Maze 🧚‍♀️
- * Guide the fairy through the magical hedge maze to reach the castle!
- * Controls: D-pad buttons (hold for continuous movement) or swipe on the maze.
+ * Enchanted Maze — Game Screen
+ *
+ * Mode "adventure" : seeded stages, 3 lives, ⭐ star rating, stage-clear overlay
+ * Mode "time"      : random maze, 90 s countdown, beat your best score
+ *
+ * Controls: hold D-pad buttons  OR  swipe on the maze
  */
 
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -19,49 +22,62 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { generateMaze, MazeGrid } from '@/utils/mazeGenerator';
 
-// ─── Layout ──────────────────────────────────────────────────────────────────
+// ─── Layout ───────────────────────────────────────────────────────────────────
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
-const COLS      = 9;
-const WALL      = 3;
-const CELL      = Math.floor((SCREEN_W - WALL * 2) / COLS);
-const MAZE_W    = CELL * COLS + WALL * 2;
-const EMOJI_SZ  = Math.floor(CELL * 0.7); // emoji font size
+const COLS     = 9;
+const WALL     = 3;
+const CELL     = Math.floor((SCREEN_W - WALL * 2) / COLS);
+const MAZE_W   = CELL * COLS + WALL * 2;
+const EMOJI_SZ = Math.floor(CELL * 0.68);
 
-// ─── Palette ─────────────────────────────────────────────────────────────────
-const C_SCREEN  = '#0f0a2e';  // deep night-sky purple
-const C_FLOOR   = '#fdf4ff';  // soft magical cream
-const C_WALL    = '#6B21A8';  // vivid magic-purple hedge
-const C_HUD_BG  = '#1e0a4a';  // dark purple HUD
-const C_GOLD    = '#FFD700';
-const C_PURPLE  = '#a78bfa';
+// ─── Palette ──────────────────────────────────────────────────────────────────
+const C_SCREEN = '#0a0118';
+const C_FLOOR  = '#fdf4ff';
+const C_WALL   = '#6B21A8';
+const C_HUD    = '#120535';
+const C_GOLD   = '#FFD700';
+const C_PURPLE = '#a78bfa';
 
-// ─── Level flavour ───────────────────────────────────────────────────────────
+// ─── Content ──────────────────────────────────────────────────────────────────
 const WORLDS = [
-  'Enchanted Forest',   'Fairy Garden',     "Dragon's Cave",
-  'Crystal Kingdom',    "Wizard's Tower",   'Mermaid Cove',
-  "Giant's Castle",     'Phoenix Valley',   'Unicorn Meadow',
-  'Rainbow Bridge',
+  'Enchanted Forest', 'Fairy Garden',    "Dragon's Cave",
+  'Crystal Kingdom',  "Wizard's Tower",  'Mermaid Cove',
+  "Giant's Castle",   'Phoenix Valley',  'Unicorn Meadow',
+  'Rainbow Bridge',   'Star Sanctuary',  'Moon Palace',
 ];
-const worldName = (lvl: number) => WORLDS[(lvl - 1) % WORLDS.length];
+const worldName = (s: number) => WORLDS[(s - 1) % WORLDS.length];
+const worldEmoji = (s: number) =>
+  ['🌲','🌸','🐉','💎','🧙','🧜','🏰','🔥','🦄','🌈','⭐','🌙'][(s - 1) % 12];
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-const pad = (n: number) => String(n).padStart(2, '0');
-const fmtTime = (s: number) => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
-const startTime = (lvl: number) => Math.max(25, 90 - (lvl - 1) * 5);
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const pad       = (n: number) => String(n).padStart(2, '0');
+const fmtTime   = (s: number) => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+const stageTime = (s: number) => Math.max(25, 90 - (s - 1) * 4);
+const stageSeed = (s: number, rows: number) => s * 997 + rows * 31 + COLS;
 
-// ─── Wall-segment builder ────────────────────────────────────────────────────
+function calcStars(used: number, total: number): 1 | 2 | 3 {
+  const r = used / total;
+  if (r <= 0.33) return 3;
+  if (r <= 0.66) return 2;
+  return 1;
+}
+
+// ─── Live star preview ────────────────────────────────────────────────────────
+function liveStars(timeLeft: number, total: number): 1 | 2 | 3 {
+  return calcStars(total - timeLeft, total);
+}
+
+// ─── Wall builder ─────────────────────────────────────────────────────────────
 function buildWalls(maze: MazeGrid, rows: number) {
   type Seg = { key: string; t: number; l: number; w: number; h: number };
   const segs: Seg[] = [];
   if (!maze || maze.length === 0) return segs;
 
   const mh = CELL * rows;
-
-  // Outer border (gap at exit = bottom-right cell)
-  segs.push({ key: 'ot', t: 0,      l: 0,          w: MAZE_W,              h: WALL });
-  segs.push({ key: 'ol', t: 0,      l: 0,           w: WALL,               h: mh + WALL });
-  segs.push({ key: 'or', t: 0,      l: MAZE_W-WALL, w: WALL,               h: mh + WALL });
-  segs.push({ key: 'ob', t: mh,     l: 0,           w: MAZE_W - CELL,      h: WALL }); // gap at exit
+  segs.push({ key: 'ot', t: 0,  l: 0,          w: MAZE_W,         h: WALL });
+  segs.push({ key: 'ol', t: 0,  l: 0,           w: WALL,           h: mh + WALL });
+  segs.push({ key: 'or', t: 0,  l: MAZE_W-WALL, w: WALL,           h: mh + WALL });
+  segs.push({ key: 'ob', t: mh, l: 0,           w: MAZE_W - CELL,  h: WALL }); // gap = exit
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < COLS; c++) {
@@ -69,12 +85,11 @@ function buildWalls(maze: MazeGrid, rows: number) {
       const x = WALL + c * CELL;
       const y = WALL + r * CELL;
 
-      if (cell.right && c < COLS - 1) {
-        segs.push({ key: `rw${r}_${c}`, t: y - WALL, l: x + CELL - WALL, w: WALL, h: CELL + WALL });
-      }
-      if (cell.bottom && !(r === rows - 1 && c === COLS - 1)) {
-        segs.push({ key: `bw${r}_${c}`, t: y + CELL - WALL, l: x - WALL, w: CELL + WALL, h: WALL });
-      }
+      if (cell.right && c < COLS - 1)
+        segs.push({ key: `rw${r}_${c}`, t: y-WALL, l: x+CELL-WALL, w: WALL, h: CELL+WALL });
+
+      if (cell.bottom && !(r === rows-1 && c === COLS-1))
+        segs.push({ key: `bw${r}_${c}`, t: y+CELL-WALL, l: x-WALL, w: CELL+WALL, h: WALL });
     }
   }
   return segs;
@@ -83,61 +98,102 @@ function buildWalls(maze: MazeGrid, rows: number) {
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function MazeGame() {
   const insets = useSafeAreaInsets();
+  const { mode, stage: stageParam } = useLocalSearchParams<{ mode?: string; stage?: string }>();
 
-  const HUD_H   = 86;
-  const CTRL_H  = 200;
-  const availH  = SCREEN_H - HUD_H - CTRL_H - insets.top - insets.bottom - 12;
-  const ROWS    = Math.max(8, Math.floor(availH / CELL));
-  const MAZE_H  = CELL * ROWS + WALL * 2;
+  const isAdventure  = mode !== 'time';
+  const initStage    = parseInt(stageParam || '1', 10);
 
-  // ── Refs ─────────────────────────────────────────────────────────────────────
-  const mazeRef     = useRef<MazeGrid>([]);
-  const playerRef   = useRef({ r: 0, c: 0 });
-  const wonRef      = useRef(false);
-  const deadRef     = useRef(false);
-  const levelRef    = useRef(1);
-  const livesRef    = useRef(3);
-  const timeRef     = useRef(startTime(1));
-  const timerIdRef  = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const dpadIdRef   = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  // ── Computed layout ─────────────────────────────────────────────────────────
+  const HUD_H  = 92;
+  const CTRL_H = 205;
+  const availH = SCREEN_H - HUD_H - CTRL_H - insets.top - insets.bottom - 14;
+  const ROWS   = Math.max(8, Math.floor(availH / CELL));
+  const MAZE_H = CELL * ROWS + WALL * 2;
 
-  const playerAnim  = useRef(
-    new Animated.ValueXY({
-      x: WALL + (CELL - EMOJI_SZ) / 2,
-      y: WALL + (CELL - EMOJI_SZ) / 2,
-    })
-  );
-  const goalScale   = useRef(new Animated.Value(1));
+  // ── Refs (no stale-closure issues) ──────────────────────────────────────────
+  const mazeRef    = useRef<MazeGrid>([]);
+  const playerRef  = useRef({ r: 0, c: 0 });
+  const wonRef     = useRef(false);
+  const deadRef    = useRef(false);
+  const stageRef   = useRef(initStage);
+  const livesRef   = useRef(isAdventure ? 3 : 1);
+  const timeRef    = useRef(isAdventure ? stageTime(initStage) : 90);
+  const timerIdRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const dpadIdRef  = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  // ── State ─────────────────────────────────────────────────────────────────────
-  const [level,      setLevel]      = useState(1);
-  const [lives,      setLives]      = useState(3);
-  const [timeLeft,   setTimeLeft]   = useState(startTime(1));
-  const [won,        setWon]        = useState(false);
-  const [gameOver,   setGameOver]   = useState(false);
-  const [mazeVer,    setMazeVer]    = useState(0);
+  const playerAnim = useRef(new Animated.ValueXY({
+    x: WALL + (CELL - EMOJI_SZ) / 2,
+    y: WALL + (CELL - EMOJI_SZ) / 2,
+  }));
+  const goalScale  = useRef(new Animated.Value(1));
 
-  // ── Pulsing castle animation ──────────────────────────────────────────────────
+  // Stage-clear animation refs
+  const clearSlide = useRef(new Animated.Value(-350));
+  const s1Anim     = useRef(new Animated.Value(0));
+  const s2Anim     = useRef(new Animated.Value(0));
+  const s3Anim     = useRef(new Animated.Value(0));
+  const confettiY  = useRef(new Animated.Value(-80));
+  const confettiOp = useRef(new Animated.Value(0));
+
+  // ── State ───────────────────────────────────────────────────────────────────
+  const [stage,     setStage]     = useState(initStage);
+  const [lives,     setLives]     = useState(isAdventure ? 3 : 1);
+  const [timeLeft,  setTimeLeft]  = useState(isAdventure ? stageTime(initStage) : 90);
+  const [won,       setWon]       = useState(false);
+  const [gameOver,  setGameOver]  = useState(false);
+  const [starsWon,  setStarsWon]  = useState<1|2|3>(1);
+  const [clearSecs, setClearSecs] = useState(0);
+  const [mazeVer,   setMazeVer]   = useState(0);
+  const [bestScore, setBestScore] = useState(0); // time attack
+
+  // ── Pulsing goal ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(goalScale.current, { toValue: 1.25, duration: 700, useNativeDriver: true }),
-        Animated.timing(goalScale.current, { toValue: 1.0,  duration: 700, useNativeDriver: true }),
-      ])
-    ).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(goalScale.current, { toValue: 1.28, duration: 750, useNativeDriver: true }),
+      Animated.timing(goalScale.current, { toValue: 1.0,  duration: 750, useNativeDriver: true }),
+    ])).start();
   }, []);
 
-  // ── Level init ───────────────────────────────────────────────────────────────
-  function initLevel(lvl: number, currentLives: number) {
+  // ── Stage-clear animation ─────────────────────────────────────────────────
+  function playClearAnim(earned: 1 | 2 | 3) {
+    clearSlide.current.setValue(-350);
+    s1Anim.current.setValue(0);
+    s2Anim.current.setValue(0);
+    s3Anim.current.setValue(0);
+    confettiY.current.setValue(-80);
+    confettiOp.current.setValue(0);
+
+    // Card slides in
+    Animated.spring(clearSlide.current, {
+      toValue: 0, tension: 48, friction: 7, useNativeDriver: true,
+    }).start();
+
+    // Confetti floats down
+    Animated.parallel([
+      Animated.timing(confettiOp.current, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.timing(confettiY.current,  { toValue: 0, duration: 600, useNativeDriver: true }),
+    ]).start();
+
+    // Stars pop in
+    setTimeout(() => Animated.spring(s1Anim.current, { toValue: 1,                    tension: 90, friction: 5, useNativeDriver: true }).start(), 480);
+    setTimeout(() => Animated.spring(s2Anim.current, { toValue: earned >= 2 ? 1 : 0.35, tension: 90, friction: 5, useNativeDriver: true }).start(), 720);
+    setTimeout(() => Animated.spring(s3Anim.current, { toValue: earned >= 3 ? 1 : 0.35, tension: 90, friction: 5, useNativeDriver: true }).start(), 960);
+  }
+
+  // ── Level init ────────────────────────────────────────────────────────────
+  function initLevel(stg: number, curLives: number) {
     clearInterval(timerIdRef.current);
-    mazeRef.current   = generateMaze(ROWS, COLS);
+
+    const seed = isAdventure ? stageSeed(stg, ROWS) : undefined;
+    mazeRef.current   = generateMaze(ROWS, COLS, seed);
     playerRef.current = { r: 0, c: 0 };
     wonRef.current    = false;
     deadRef.current   = false;
-    levelRef.current  = lvl;
-    livesRef.current  = currentLives;
-    const t = startTime(lvl);
-    timeRef.current   = t;
+    stageRef.current  = stg;
+    livesRef.current  = curLives;
+
+    const t = isAdventure ? stageTime(stg) : 90;
+    timeRef.current = t;
 
     playerAnim.current.stopAnimation();
     playerAnim.current.setValue({
@@ -145,17 +201,15 @@ export default function MazeGame() {
       y: WALL + (CELL - EMOJI_SZ) / 2,
     });
 
-    setLevel(lvl);
-    setLives(currentLives);
+    setStage(stg);
+    setLives(curLives);
     setTimeLeft(t);
     setWon(false);
     setGameOver(false);
+    setStarsWon(1);
     setMazeVer((v) => v + 1);
 
-    startTimer();
-  }
-
-  function startTimer() {
+    // Start timer
     clearInterval(timerIdRef.current);
     timerIdRef.current = setInterval(() => {
       if (wonRef.current || deadRef.current) return;
@@ -171,14 +225,14 @@ export default function MazeGame() {
           deadRef.current = true;
           setGameOver(true);
         } else {
-          initLevel(levelRef.current, nl);
+          initLevel(stageRef.current, nl);
         }
       }
     }, 1000);
   }
 
   useEffect(() => {
-    initLevel(1, 3);
+    initLevel(initStage, isAdventure ? 3 : 1);
     return () => {
       clearInterval(timerIdRef.current);
       clearInterval(dpadIdRef.current);
@@ -186,7 +240,7 @@ export default function MazeGame() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Move ──────────────────────────────────────────────────────────────────────
+  // ── Move ─────────────────────────────────────────────────────────────────────
   function move(dr: number, dc: number) {
     if (wonRef.current || deadRef.current) return;
     const { r, c } = playerRef.current;
@@ -194,15 +248,14 @@ export default function MazeGame() {
     if (!cell) return;
 
     const blocked =
-      (dr === -1 && cell.top)    ||
-      (dr === 1  && cell.bottom) ||
-      (dc === -1 && cell.left)   ||
-      (dc === 1  && cell.right);
+      (dr === -1 && cell.top)    || (dr === 1 && cell.bottom) ||
+      (dc === -1 && cell.left)   || (dc === 1 && cell.right);
 
     if (!blocked) {
       const nr = r + dr, nc = c + dc;
       if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
         playerRef.current = { r: nr, c: nc };
+
         Animated.timing(playerAnim.current, {
           toValue: {
             x: WALL + nc * CELL + (CELL - EMOJI_SZ) / 2,
@@ -212,16 +265,28 @@ export default function MazeGame() {
           useNativeDriver: true,
         }).start();
 
+        // Win check
         if (nr === ROWS - 1 && nc === COLS - 1) {
           wonRef.current = true;
           clearInterval(timerIdRef.current);
+
+          if (isAdventure) {
+            const total  = stageTime(stageRef.current);
+            const used   = total - timeRef.current;
+            const earned = calcStars(used, total);
+            setClearSecs(used);
+            setStarsWon(earned);
+            playClearAnim(earned);
+          } else {
+            if (timeRef.current > bestScore) setBestScore(timeRef.current);
+          }
           setWon(true);
         }
       }
     }
   }
 
-  // ── D-pad hold ────────────────────────────────────────────────────────────────
+  // ── D-pad hold ───────────────────────────────────────────────────────────────
   function startMove(dr: number, dc: number) {
     clearInterval(dpadIdRef.current);
     move(dr, dc);
@@ -229,67 +294,92 @@ export default function MazeGame() {
   }
   function stopMove() { clearInterval(dpadIdRef.current); }
 
-  // ── Swipe ─────────────────────────────────────────────────────────────────────
+  // ── Swipe ────────────────────────────────────────────────────────────────────
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder:  () => true,
       onPanResponderRelease: (_, gs) => {
-        const { dx, dy } = gs;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          dx > 15 ? move(0, 1) : move(0, -1);
+        if (Math.abs(gs.dx) > Math.abs(gs.dy)) {
+          gs.dx > 15 ? move(0, 1) : move(0, -1);
         } else {
-          dy > 15 ? move(1, 0) : move(-1, 0);
+          gs.dy > 15 ? move(1, 0) : move(-1, 0);
         }
       },
     })
   ).current;
 
-  // ── Wall segments memo ────────────────────────────────────────────────────────
+  // ── Wall segments (only recomputed on new maze) ───────────────────────────
   const wallSegs = useMemo(
     () => buildWalls(mazeRef.current, ROWS),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mazeVer]
   );
 
-  // Goal position
-  const goalX = WALL + (COLS - 1) * CELL + (CELL - EMOJI_SZ) / 2;
-  const goalY = WALL + (ROWS - 1) * CELL + (CELL - EMOJI_SZ) / 2;
+  // ── Derived ──────────────────────────────────────────────────────────────────
+  const goalX   = WALL + (COLS-1) * CELL + (CELL - EMOJI_SZ) / 2;
+  const goalY   = WALL + (ROWS-1) * CELL + (CELL - EMOJI_SZ) / 2;
+  const hearts  = '❤️ '.repeat(lives).trim() || '💔';
+  const curLive = liveStars(timeLeft, isAdventure ? stageTime(stage) : 90);
 
-  // ── Heart lives ───────────────────────────────────────────────────────────────
-  const heartsDisplay = '❤️ '.repeat(lives).trim();
-
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
 
       {/* ── HUD ── */}
       <View style={styles.hud}>
-        <View style={styles.hudItem}>
-          <Text style={styles.hudLabel}>LEVEL</Text>
-          <Text style={styles.hudBig}>{level}</Text>
-          <Text style={styles.hudWorld} numberOfLines={1}>{worldName(level)}</Text>
-        </View>
-        <View style={styles.hudItem}>
-          <Text style={styles.hudLabel}>TIME</Text>
-          <Text style={[styles.hudBig, timeLeft <= 10 && styles.timeWarn]}>
-            {fmtTime(timeLeft)}
-          </Text>
-        </View>
-        <View style={styles.hudItem}>
-          <Text style={styles.hudLabel}>LIVES</Text>
-          <Text style={styles.hudHearts}>{heartsDisplay || '💔'}</Text>
-        </View>
+        {isAdventure ? (
+          <>
+            {/* Stage + world */}
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>STAGE</Text>
+              <Text style={styles.hudBig}>{stage}</Text>
+              <Text style={styles.hudTiny} numberOfLines={1}>
+                {worldEmoji(stage)} {worldName(stage)}
+              </Text>
+            </View>
+
+            {/* Timer + live stars */}
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>TIME</Text>
+              <Text style={[styles.hudBig, timeLeft <= 10 && styles.timeWarn]}>
+                {fmtTime(timeLeft)}
+              </Text>
+              <Text style={styles.hudLiveStars}>
+                {'⭐'.repeat(curLive)}{'☆'.repeat(3 - curLive)}
+              </Text>
+            </View>
+
+            {/* Lives */}
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>LIVES</Text>
+              <Text style={styles.hudHearts}>{hearts}</Text>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>⚡ TIME ATTACK</Text>
+              <Text style={[styles.hudBig, { color: '#fb923c' }, timeLeft <= 10 && styles.timeWarn]}>
+                {fmtTime(timeLeft)}
+              </Text>
+            </View>
+            <View style={styles.hudBlock}>
+              <Text style={styles.hudSmall}>🏆 BEST</Text>
+              <Text style={[styles.hudBig, { color: C_GOLD }]}>
+                {bestScore > 0 ? fmtTime(bestScore) : '--:--'}
+              </Text>
+            </View>
+          </>
+        )}
       </View>
 
       {/* ── Maze ── */}
       <View
-        style={[styles.mazeFrame, { width: MAZE_W + 6, height: MAZE_H + 6 }]}
+        style={[styles.mazeFrame, { width: MAZE_W + 8, height: MAZE_H + 8 }]}
         {...pan.panHandlers}
       >
-        {/* Golden glowing border */}
-        <View style={[styles.mazeInner, { width: MAZE_W, height: MAZE_H, backgroundColor: C_FLOOR }]}>
-          {/* Hedge walls */}
+        <View style={[styles.mazeInner, { width: MAZE_W, height: MAZE_H }]}>
           {wallSegs.map((s) => (
             <View
               key={s.key}
@@ -298,34 +388,27 @@ export default function MazeGame() {
                 top: s.t, left: s.l,
                 width: s.w, height: s.h,
                 backgroundColor: C_WALL,
-                borderRadius: 1,
               }}
             />
           ))}
 
-          {/* ── Castle goal (pulsing) ── */}
+          {/* Castle goal (pulsing) */}
           <Animated.Text
             style={[
               styles.goalEmoji,
-              {
-                left: goalX,
-                top: goalY,
-                fontSize: EMOJI_SZ,
-                transform: [{ scale: goalScale.current }],
-              },
+              { left: goalX, top: goalY, fontSize: EMOJI_SZ,
+                transform: [{ scale: goalScale.current }] },
             ]}
           >
             🏰
           </Animated.Text>
 
-          {/* ── Fairy player ── */}
+          {/* Fairy player */}
           <Animated.Text
             style={[
               styles.playerEmoji,
-              {
-                fontSize: EMOJI_SZ,
-                transform: playerAnim.current.getTranslateTransform(),
-              },
+              { fontSize: EMOJI_SZ,
+                transform: playerAnim.current.getTranslateTransform() },
             ]}
           >
             🧚‍♀️
@@ -335,50 +418,127 @@ export default function MazeGame() {
 
       {/* ── D-Pad ── */}
       <View style={styles.dpad}>
-        <DBtn onPressIn={() => startMove(-1, 0)} onPressOut={stopMove} label="▲" />
+        <DBtn label="▲" onPressIn={() => startMove(-1, 0)} onPressOut={stopMove} />
         <View style={styles.dRow}>
-          <DBtn onPressIn={() => startMove(0, -1)} onPressOut={stopMove} label="◀" />
+          <DBtn label="◀" onPressIn={() => startMove(0, -1)} onPressOut={stopMove} />
           <View style={styles.dCenter}>
             <Text style={styles.dCenterTxt}>🧭</Text>
           </View>
-          <DBtn onPressIn={() => startMove(0, 1)} onPressOut={stopMove} label="▶" />
+          <DBtn label="▶" onPressIn={() => startMove(0, 1)} onPressOut={stopMove} />
         </View>
-        <DBtn onPressIn={() => startMove(1, 0)} onPressOut={stopMove} label="▼" />
+        <DBtn label="▼" onPressIn={() => startMove(1, 0)} onPressOut={stopMove} />
       </View>
 
-      {/* ── Level Complete overlay ── */}
-      {won && (
+      {/* ════════ ADVENTURE STAGE CLEAR ════════ */}
+      {won && isAdventure && (
         <View style={styles.overlay}>
-          <Text style={styles.ovEmoji}>🎉</Text>
-          <Text style={styles.ovWin}>Amazing!</Text>
-          <Text style={styles.ovWorld}>{worldName(level)} cleared!</Text>
-          <Text style={styles.ovSub}>Time left: {fmtTime(timeLeft)}</Text>
-          <TouchableOpacity
-            style={[styles.ovBtn, { backgroundColor: '#166534' }]}
-            onPress={() => initLevel(level + 1, lives)}
+          {/* Confetti row */}
+          <Animated.Text
+            style={[
+              styles.confetti,
+              { opacity: confettiOp.current,
+                transform: [{ translateY: confettiY.current }] },
+            ]}
           >
-            <Text style={styles.ovBtnTxt}>Next World ✨</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.ovHome} onPress={() => router.back()}>
-            <Text style={styles.ovHomeTxt}>🏠 Home</Text>
-          </TouchableOpacity>
+            🎉 ✨ 🎊 🌟 🎉
+          </Animated.Text>
+
+          {/* Card */}
+          <Animated.View
+            style={[styles.clearCard, { transform: [{ translateY: clearSlide.current }] }]}
+          >
+            <Text style={styles.clearTitle}>Stage Clear! 🏆</Text>
+            <Text style={styles.clearWorld}>
+              {worldEmoji(stage)}  {worldName(stage)}
+            </Text>
+
+            {/* Stars */}
+            <View style={styles.starsRow}>
+              {([s1Anim, s2Anim, s3Anim] as { current: Animated.Value }[]).map((a, i) => (
+                <Animated.Text
+                  key={i}
+                  style={[styles.starIcon, {
+                    transform: [{ scale: a.current }],
+                    opacity: a.current,
+                  }]}
+                >
+                  ⭐
+                </Animated.Text>
+              ))}
+            </View>
+
+            <Text style={styles.clearTime}>
+              Clear Time: {fmtTime(clearSecs)}
+            </Text>
+            {starsWon === 3 && (
+              <Text style={styles.bonusLine}>🎁 Bonus life earned!</Text>
+            )}
+
+            <View style={styles.clearBtns}>
+              <TouchableOpacity
+                style={[styles.cBtn, styles.cBtnMenu]}
+                onPress={() => router.replace('/home')}
+              >
+                <Text style={styles.cBtnTxt}>🏠{'\n'}MENU</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cBtn, styles.cBtnRetry]}
+                onPress={() => initLevel(stage, lives)}
+              >
+                <Text style={styles.cBtnTxt}>🔄{'\n'}RETRY</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cBtn, styles.cBtnNext]}
+                onPress={() =>
+                  initLevel(stage + 1, Math.min(lives + (starsWon === 3 ? 1 : 0), 5))
+                }
+              >
+                <Text style={styles.cBtnTxt}>NEXT{'\n'}▶</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
         </View>
       )}
 
-      {/* ── Game Over overlay ── */}
+      {/* ════════ TIME ATTACK WIN ════════ */}
+      {won && !isAdventure && (
+        <View style={styles.overlay}>
+          <Text style={styles.taEmoji}>⚡</Text>
+          <Text style={styles.taTitle}>Maze Solved!</Text>
+          <Text style={styles.taSub}>Time remaining</Text>
+          <Text style={styles.taScore}>{fmtTime(timeLeft)}</Text>
+          {timeLeft >= bestScore && bestScore > 0 && (
+            <Text style={styles.taNewBest}>🏆 New Best Score!</Text>
+          )}
+          <View style={styles.taBtns}>
+            <TouchableOpacity style={[styles.cBtn, styles.cBtnMenu]} onPress={() => router.replace('/home')}>
+              <Text style={styles.cBtnTxt}>🏠{'\n'}MENU</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.cBtn, styles.cBtnNext]} onPress={() => initLevel(1, 1)}>
+              <Text style={styles.cBtnTxt}>▶{'\n'}AGAIN</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ════════ GAME OVER ════════ */}
       {gameOver && (
         <View style={styles.overlay}>
-          <Text style={styles.ovEmoji}>💫</Text>
-          <Text style={styles.ovLose}>Oh No!</Text>
-          <Text style={styles.ovSub}>You reached level {level}</Text>
+          <Text style={styles.goEmoji}>💫</Text>
+          <Text style={styles.goTitle}>Oh No!</Text>
+          <Text style={styles.goSub}>
+            {isAdventure
+              ? `You reached stage ${stage}\n${worldEmoji(stage)} ${worldName(stage)}`
+              : 'Time ran out!'}
+          </Text>
           <TouchableOpacity
-            style={[styles.ovBtn, { backgroundColor: '#7c3aed' }]}
-            onPress={() => initLevel(1, 3)}
+            style={[styles.cBtn, styles.cBtnNext, { paddingHorizontal: 40, marginBottom: 14 }]}
+            onPress={() => initLevel(isAdventure ? stage : 1, isAdventure ? 3 : 1)}
           >
-            <Text style={styles.ovBtnTxt}>🎮 Try Again!</Text>
+            <Text style={[styles.cBtnTxt, { fontSize: 17 }]}>🎮  Try Again!</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.ovHome} onPress={() => router.back()}>
-            <Text style={styles.ovHomeTxt}>🏠 Home</Text>
+          <TouchableOpacity onPress={() => router.replace('/home')}>
+            <Text style={styles.goHome}>🏠  Home</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -386,20 +546,16 @@ export default function MazeGame() {
   );
 }
 
-// ─── D-Pad Button component ───────────────────────────────────────────────────
+// ─── D-Pad button ─────────────────────────────────────────────────────────────
 function DBtn({
   label, onPressIn, onPressOut,
-}: {
-  label: string;
-  onPressIn: () => void;
-  onPressOut: () => void;
-}) {
+}: { label: string; onPressIn: () => void; onPressOut: () => void }) {
   return (
     <TouchableOpacity
       style={styles.dBtn}
       onPressIn={onPressIn}
       onPressOut={onPressOut}
-      activeOpacity={0.65}
+      activeOpacity={0.62}
     >
       <Text style={styles.dBtnTxt}>{label}</Text>
     </TouchableOpacity>
@@ -408,91 +564,68 @@ function DBtn({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: C_SCREEN,
-    alignItems: 'center',
-  },
+  root: { flex: 1, backgroundColor: C_SCREEN, alignItems: 'center' },
 
   // ── HUD ──────────────────────────────────────────────────────────────────────
   hud: {
-    width: '100%',
-    height: 86,
+    width: '100%', height: 92,
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    backgroundColor: C_HUD_BG,
+    backgroundColor: C_HUD,
     borderBottomWidth: 2,
     borderBottomColor: C_GOLD,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     shadowColor: C_GOLD,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.35,
     shadowRadius: 8,
     elevation: 6,
   },
-  hudItem:   { alignItems: 'center', flex: 1 },
-  hudLabel:  { color: C_PURPLE, fontSize: 10, fontWeight: '700', letterSpacing: 1.5 },
-  hudBig:    { color: '#fff', fontSize: 22, fontWeight: 'bold', lineHeight: 26 },
-  hudWorld:  { color: C_GOLD, fontSize: 9, fontWeight: '600', letterSpacing: 0.5 },
-  hudHearts: { fontSize: 18, lineHeight: 24 },
-  timeWarn:  { color: '#f87171' },
+  hudBlock:     { alignItems: 'center', flex: 1 },
+  hudSmall:     { color: C_PURPLE, fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
+  hudBig:       { color: '#fff', fontSize: 22, fontWeight: 'bold', lineHeight: 26 },
+  hudTiny:      { color: C_GOLD, fontSize: 9, fontWeight: '600' },
+  hudLiveStars: { fontSize: 14, lineHeight: 18 },
+  hudHearts:    { fontSize: 16, lineHeight: 22 },
+  timeWarn:     { color: '#f87171' },
 
   // ── Maze ─────────────────────────────────────────────────────────────────────
   mazeFrame: {
     marginTop: 8,
-    padding: 3,
-    borderRadius: 8,
+    padding: 4,
+    borderRadius: 10,
     backgroundColor: C_GOLD,
     shadowColor: C_GOLD,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 14,
-    elevation: 10,
+    shadowOpacity: 0.55,
+    shadowRadius: 16,
+    elevation: 12,
   },
-  mazeInner: {
-    overflow: 'hidden',
-    borderRadius: 5,
-  },
-  goalEmoji: {
-    position: 'absolute',
-    textAlign: 'center',
-  },
-  playerEmoji: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    textAlign: 'center',
-  },
+  mazeInner:    { overflow: 'hidden', borderRadius: 6, backgroundColor: C_FLOOR },
+  goalEmoji:    { position: 'absolute', textAlign: 'center' },
+  playerEmoji:  { position: 'absolute', top: 0, left: 0, textAlign: 'center' },
 
   // ── D-Pad ─────────────────────────────────────────────────────────────────────
-  dpad: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  dRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  dCenter: {
-    width: 54, height: 54,
-    backgroundColor: '#1a0840',
+  dpad:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  dRow:      { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dCenter:   {
+    width: 52, height: 52,
+    backgroundColor: '#120228',
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dCenterTxt: { fontSize: 28 },
+  dCenterTxt: { fontSize: 26 },
   dBtn: {
-    width: 54, height: 54,
+    width: 52, height: 52,
     backgroundColor: '#1e0a4a',
-    borderWidth: 2,
-    borderColor: C_PURPLE,
+    borderWidth: 2, borderColor: C_PURPLE,
     borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
     shadowColor: C_PURPLE,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.6,
-    shadowRadius: 8,
+    shadowOpacity: 0.55, shadowRadius: 8,
     elevation: 6,
   },
   dBtnTxt: { color: '#e9d5ff', fontSize: 22 },
@@ -500,42 +633,75 @@ const styles = StyleSheet.create({
   // ── Overlays ─────────────────────────────────────────────────────────────────
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(4,2,18,0.92)',
+    backgroundColor: 'rgba(3,1,15,0.88)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ovEmoji: { fontSize: 80, marginBottom: 4 },
-  ovWin: {
+
+  // Stage Clear
+  confetti: { fontSize: 28, marginBottom: 12 },
+  clearCard: {
+    backgroundColor: '#1a0540',
+    borderWidth: 2.5,
+    borderColor: C_GOLD,
+    borderRadius: 28,
+    padding: 28,
+    alignItems: 'center',
+    width: '88%',
+    shadowColor: C_GOLD,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 14,
+  },
+  clearTitle: {
     color: C_GOLD,
-    fontSize: 50,
+    fontSize: 34,
     fontWeight: 'bold',
     textShadowColor: C_GOLD,
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
+    textShadowRadius: 14,
     marginBottom: 4,
   },
-  ovLose: {
-    color: '#f87171',
-    fontSize: 50,
-    fontWeight: 'bold',
-    textShadowColor: '#f87171',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-    marginBottom: 4,
+  clearWorld: { color: C_PURPLE, fontSize: 16, marginBottom: 20 },
+  starsRow:   { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  starIcon:   { fontSize: 44 },
+  clearTime:  { color: '#ccc', fontSize: 16, marginBottom: 6 },
+  bonusLine:  { color: '#4ade80', fontSize: 14, fontWeight: '600', marginBottom: 6 },
+  clearBtns:  { flexDirection: 'row', gap: 12, marginTop: 18 },
+  cBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+    minWidth: 76,
+    elevation: 6,
   },
-  ovWorld:  { color: C_PURPLE, fontSize: 18, marginBottom: 4 },
-  ovSub:    { color: '#aaa', fontSize: 16, marginBottom: 36 },
-  ovBtn: {
-    paddingHorizontal: 52,
-    paddingVertical: 16,
-    borderRadius: 50,
-    marginBottom: 14,
+  cBtnMenu:  { backgroundColor: '#374151' },
+  cBtnRetry: { backgroundColor: '#1d4ed8' },
+  cBtnNext:  {
+    backgroundColor: '#166534',
+    shadowColor: '#4ade80',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 14,
-    elevation: 8,
+    shadowOpacity: 0.6,
+    shadowRadius: 10,
   },
-  ovBtnTxt: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  ovHome:   { paddingHorizontal: 52, paddingVertical: 14 },
-  ovHomeTxt: { color: '#666', fontSize: 18 },
+  cBtnTxt: { color: '#fff', fontSize: 14, fontWeight: 'bold', textAlign: 'center', lineHeight: 20 },
+
+  // Time Attack Win
+  taEmoji:   { fontSize: 70, marginBottom: 6 },
+  taTitle:   { color: '#fb923c', fontSize: 44, fontWeight: 'bold', marginBottom: 4 },
+  taSub:     { color: '#aaa', fontSize: 16 },
+  taScore:   { color: C_GOLD, fontSize: 48, fontWeight: 'bold', marginBottom: 8 },
+  taNewBest: { color: '#4ade80', fontSize: 18, fontWeight: 'bold', marginBottom: 28 },
+  taBtns:    { flexDirection: 'row', gap: 16 },
+
+  // Game Over
+  goEmoji: { fontSize: 80, marginBottom: 6 },
+  goTitle: {
+    color: '#f87171', fontSize: 52, fontWeight: 'bold', marginBottom: 6,
+    textShadowColor: '#f87171', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 18,
+  },
+  goSub:  { color: '#aaa', fontSize: 17, textAlign: 'center', lineHeight: 26, marginBottom: 36 },
+  goHome: { color: '#555', fontSize: 18 },
 });
