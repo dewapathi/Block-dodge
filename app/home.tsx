@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { GameProgress } from '@/utils/gameProgress';
+import { GameProgress, TimeAttackBest } from '@/utils/gameProgress';
 
 const { width: W } = Dimensions.get('window');
 
@@ -38,9 +38,12 @@ export default function HomeScreen() {
   // useFocusEffect fires whether the screen is re-mounted (router.replace) OR
   // just restored from the stack (device back button), so progress is always fresh.
   const [savedProgress, setSavedProgress] = useState(GameProgress.get());
+  const [taBest,        setTaBest]        = useState(TimeAttackBest.get());
+
   useFocusEffect(
     useCallback(() => {
       GameProgress.load().then(setSavedProgress);
+      TimeAttackBest.load().then(setTaBest);
     }, [])
   );
 
@@ -160,9 +163,13 @@ export default function HomeScreen() {
             onPress={() => router.push('/maze?mode=time')}
             activeOpacity={0.82}
           >
-            <Text style={styles.cardEmoji}>⚡</Text>
+            <Text style={styles.cardEmoji}>⏱️</Text>
             <Text style={[styles.cardTitle, { color: '#fb923c' }]}>TIME ATTACK</Text>
-            <Text style={styles.cardDesc}>{'Race the clock\nBeat your best!'}</Text>
+            <Text style={styles.cardDesc}>
+              {taBest > 0
+                ? `Best: ${taBest} maze${taBest !== 1 ? 's' : ''} 🏆\n+15s per solve!`
+                : '+15s per solve!'}
+            </Text>
           </TouchableOpacity>
         </Animated.View>
       </View>
@@ -219,10 +226,11 @@ const styles = StyleSheet.create({
   },
   halfCard: { flex: 1 },
   card: {
-    padding: 22,
+    padding: 24,
     borderRadius: 24,
     alignItems: 'center',
     elevation: 14,
+    paddingVertical:  40
   },
   adventureCard: {
     backgroundColor: '#031a0a',
@@ -243,8 +251,8 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
   },
   cardEmoji: { fontSize: 52, marginBottom: 10 },
-  cardTitle: { fontSize: 17, fontWeight: 'bold', marginBottom: 8, letterSpacing: 1 },
-  cardDesc:  { color: 'rgba(255,255,255,0.55)', fontSize: 12, textAlign: 'center', lineHeight: 18 },
+  cardTitle: { fontSize: 7, fontWeight: 'bold', marginBottom: 8 },
+  cardDesc:  { color: 'rgba(255,255,255,0.55)', fontSize: 10, textAlign: 'center', lineHeight: 18 },
 
   bottomRow: {
     gap: 10,

@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { generateMaze, MazeGrid } from '@/utils/mazeGenerator';
+import { generateQualityMaze, MazeGrid } from '@/utils/mazeGenerator';
 import { GameProgress, TimeAttackBest } from '@/utils/gameProgress';
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
@@ -73,7 +73,38 @@ const worldEmoji = (s: number) =>
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const pad       = (n: number) => String(n).padStart(2, '0');
 const fmtTime   = (s: number) => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
-const stageTime = (s: number) => Math.max(25, 90 - (s - 1) * 4);
+/**
+ * Time per stage — scales UP with maze complexity so harder stages stay fair.
+ * Within each difficulty tier it tightens slightly to keep the challenge alive.
+ *
+ *  Tier   cols  stages   start → end
+ *  Easy     7    1-3      60 s →  45 s
+ *  Medium   9    4-7      90 s →  75 s
+ *  Hard    11    8-12    120 s → 105 s
+ *  V.Hard  13   13-18   150 s → 135 s
+ *  Extreme 15   19+     180 s → 165 s
+ */
+function stageTime(s: number): number {
+  const cols = colsForStage(s);
+  const base:      Record<number, number> = { 7: 60,  9: 90,  11: 120, 13: 150, 15: 180 };
+  const tierFirst: Record<number, number> = { 7: 1,   9: 4,   11: 8,   13: 13,  15: 19  };
+  const tierLen:   Record<number, number> = { 7: 3,   9: 4,   11: 5,   13: 6,   15: 100 };
+  const progress = Math.min(1, (s - tierFirst[cols]) / tierLen[cols]);
+  return Math.round(base[cols] - progress * 15);
+}
+
+/**
+ * Candidates to generate per stage — more attempts on harder stages means
+ * we keep the maze with the longest solution path (most challenging puzzle).
+ */
+function mazeAttempts(cols: number): number {
+  if (cols <= 7)  return 3;
+  if (cols <= 9)  return 5;
+  if (cols <= 11) return 7;
+  if (cols <= 13) return 10;
+  return 12;
+}
+
 const stageSeed = (s: number, rows: number, cols: number) => s * 997 + rows * 31 + cols;
 
 function calcStars(used: number, total: number): 1 | 2 | 3 {
@@ -279,7 +310,7 @@ export default function MazeGame() {
     const { COLS, CELL, ROWS, EMOJI_SZ } = layoutRef.current;
 
     const seed = isAdventure ? stageSeed(stg, ROWS, COLS) : undefined;
-    mazeRef.current   = generateMaze(ROWS, COLS, seed);
+    mazeRef.current   = generateQualityMaze(ROWS, COLS, seed, mazeAttempts(COLS));
     playerRef.current = { r: 0, c: 0 };
     wonRef.current    = false;
     deadRef.current   = false;
@@ -336,7 +367,7 @@ export default function MazeGame() {
     layoutRef.current = computeLayout(count, availH);
     const { COLS, CELL, ROWS, EMOJI_SZ } = layoutRef.current;
 
-    mazeRef.current   = generateMaze(ROWS, COLS); // random — no seed
+    mazeRef.current   = generateQualityMaze(ROWS, COLS, undefined, mazeAttempts(COLS));
     playerRef.current = { r: 0, c: 0 };
     wonRef.current    = false;
 

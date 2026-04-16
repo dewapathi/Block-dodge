@@ -67,3 +67,61 @@ export function generateMaze(rows: number, cols: number, seed?: number): MazeGri
   dfs(0, 0);
   return grid;
 }
+
+// ─── BFS: shortest solution path length (start=top-left, goal=bottom-right) ──
+function bfsPathLength(grid: MazeGrid, rows: number, cols: number): number {
+  const dist: number[][] = Array.from({ length: rows }, () =>
+    new Array(cols).fill(-1)
+  );
+  const queue: [number, number][] = [[0, 0]];
+  dist[0][0] = 0;
+
+  while (queue.length > 0) {
+    const [r, c] = queue.shift()!;
+    const d = dist[r][c];
+    const cell = grid[r][c];
+
+    if (!cell.top    && r > 0       && dist[r-1][c] === -1) { dist[r-1][c] = d+1; queue.push([r-1, c]); }
+    if (!cell.bottom && r < rows-1  && dist[r+1][c] === -1) { dist[r+1][c] = d+1; queue.push([r+1, c]); }
+    if (!cell.left   && c > 0       && dist[r][c-1] === -1) { dist[r][c-1] = d+1; queue.push([r,   c-1]); }
+    if (!cell.right  && c < cols-1  && dist[r][c+1] === -1) { dist[r][c+1] = d+1; queue.push([r,   c+1]); }
+  }
+
+  return dist[rows-1][cols-1]; // -1 means unreachable (shouldn't happen in a perfect maze)
+}
+
+/**
+ * Generate `attempts` mazes and return the one with the LONGEST solution path.
+ *
+ * Why: A single recursive-backtracker run produces mazes of wildly varying
+ * difficulty — sometimes the solution is a short diagonal, sometimes it
+ * winds through the whole grid.  By selecting the hardest candidate out of
+ * several, we guarantee a genuinely challenging puzzle without changing the
+ * core algorithm.
+ *
+ * For seeded (adventure) mazes the selection is still deterministic: the
+ * same seed always produces the same winner because we use seed, seed+P,
+ * seed+2P … with a fixed prime stride.
+ */
+export function generateQualityMaze(
+  rows: number,
+  cols: number,
+  seed: number | undefined,
+  attempts: number = 1,
+): MazeGrid {
+  if (attempts <= 1) return generateMaze(rows, cols, seed);
+
+  const PRIME_STRIDE = 7919; // large prime — spreads seeds across RNG space
+
+  let bestMaze = generateMaze(rows, cols, seed);
+  let bestLen  = bfsPathLength(bestMaze, rows, cols);
+
+  for (let i = 1; i < attempts; i++) {
+    const s         = seed !== undefined ? seed + i * PRIME_STRIDE : undefined;
+    const candidate = generateMaze(rows, cols, s);
+    const len       = bfsPathLength(candidate, rows, cols);
+    if (len > bestLen) { bestLen = len; bestMaze = candidate; }
+  }
+
+  return bestMaze;
+}
